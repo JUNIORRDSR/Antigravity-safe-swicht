@@ -72,6 +72,43 @@ function Save-AgyProfile {
     [pscustomobject]@{ Name = $Name; BlobBytes = $bytes; Fingerprint = $fp }
 }
 
+# The metadata in state.json can go missing while the credential itself survives
+# in Credential Manager - a restored backup, a hand-edited state file, a wiped
+# config. Adoption rebuilds the entry from what is already stored, so an account
+# does not have to be signed into again merely to be registered a second time.
+# It does not touch the live credential: adopting is not switching.
+function Register-AgyStoredProfile {
+    param([Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')][string]$Name)
+
+    $cred = Get-AgyCredential -Target (Get-AgyProfileTarget $Name)
+    if ($null -eq $cred) {
+        throw "No stored credential for profile '$Name'. Sign in as that account, then run: agy-auto profile save $Name"
+    }
+    $fp = ''
+    $bytes = 0
+    try { $fp = Get-AgyBlobFingerprint $cred.Blob; $bytes = $cred.Blob.Length } finally { Clear-AgyBlob $cred.Blob }
+
+    $state = Get-AgyAutoState
+    $meta = Get-AgyProfileMeta -State $state -Name $Name
+    $wasNew = $null -eq $meta
+    if ($wasNew) {
+        $meta = New-AgyProfileMeta -Name $Name -Order (Get-AgyAutoCount (Get-AgyAutoPropertyNames $state.profiles))
+    }
+    $meta.fingerprint = $fp
+    $meta.blobBytes = $bytes
+    Set-AgyProfileMeta -State $state -Name $Name -Meta $meta
+    Set-AgyAutoState $state
+
+    $cfg = Get-AgyAutoConfig
+    if (@($cfg.profileOrder) -notcontains $Name) {
+        $cfg.profileOrder = @(@($cfg.profileOrder) + $Name)
+        Set-AgyAutoConfig $cfg
+    }
+
+    Write-AgyAutoLog -Level INFO -Message ("profile '{0}' adopted from the credential store ({1} bytes, fp {2})" -f $Name, $bytes, (Format-AgyFingerprint $fp))
+    [pscustomobject]@{ Name = $Name; BlobBytes = $bytes; Fingerprint = $fp; WasNew = $wasNew }
+}
+
 function Remove-AgyProfile {
     param([Parameter(Mandatory)][string]$Name)
     $removed = Remove-AgyCredential -Target (Get-AgyProfileTarget $Name)

@@ -28,6 +28,7 @@ design and that the fingerprint is what identifies a profile.
 | See every profile and its quota state | `agy-auto profile list` |
 | Which account is signed in right now | `agy-auto profile current` |
 | Store the signed-in account as a profile | `agy-auto profile save <name>` |
+| Re-register a profile whose metadata was lost | `agy-auto profile adopt <name>` |
 | Switch accounts by hand | `agy-auto profile switch <name>` |
 | See what rotation would pick next | `agy-auto profile next` |
 | Forget a profile | `agy-auto profile delete <name>` |

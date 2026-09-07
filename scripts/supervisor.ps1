@@ -121,12 +121,15 @@ function Start-AgyChild {
 
     $p = New-Object Diagnostics.Process
     $p.StartInfo = $psi
+    # Taken before Start(): no hook of this child can write an event earlier
+    # than this, and every event from the previous child is already older.
+    $spawnedAt = (Get-Date).ToUniversalTime()
     if (-not $p.Start()) { throw "Failed to start '$RealAgyPath'" }
 
     $startTime = $null
     try { $startTime = $p.StartTime } catch { }
     Write-AgyAutoLog -Message ("agy child PID {0} started" -f $p.Id)
-    [pscustomobject]@{ Process = $p; Pid = $p.Id; StartTime = $startTime }
+    [pscustomobject]@{ Process = $p; Pid = $p.Id; StartTime = $startTime; SpawnedAt = $spawnedAt }
 }
 
 # The identity gate: only ever act on the exact process we launched.
@@ -178,14 +181,33 @@ function Stop-AgyChild {
 
 # ------------------------------------------------------------------ events ---
 
+# -Since is the current child's spawn instant. A quota error raised by the
+# child we already replaced says nothing about the credential now in use, and
+# one dying agy emits one event per conversation - the agent's own plus every
+# sub-agent's - so the queue routinely outlives its author. Without this gate
+# the first leftover is read back as a fresh hit and drains the new profile.
 function Get-AgyPendingEvent {
-    param([Parameter(Mandatory)][string]$SessionId)
+    param(
+        [Parameter(Mandatory)][string]$SessionId,
+        [AllowNull()][Nullable[datetime]]$Since
+    )
     $dir = Get-AgyAutoPath 'events'
     if (-not (Test-Path -LiteralPath $dir)) { return $null }
     foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.json' -ErrorAction SilentlyContinue | Sort-Object Name) {
         $e = Read-AgyAutoJson $f.FullName
         if ($null -eq $e) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue; continue }
         if ($e.session -ne $SessionId) { continue }   # another supervisor's event
+        if ($null -ne $Since) {
+            # A missing or unreadable createdAt is treated as stale: an event
+            # that cannot prove it belongs to the live child must not rotate it.
+            $created = $null
+            try { $created = ([datetime]$e.createdAt).ToUniversalTime() } catch { }
+            if ($null -eq $created -or $created -lt $Since) {
+                Write-AgyAutoLog -Message ("ignoring event from a previous child: {0}" -f $f.Name)
+                Complete-AgyEvent -Path $f.FullName
+                continue
+            }
+        }
         return [pscustomobject]@{ File = $f.FullName; Data = $e }
     }
     $null
@@ -206,6 +228,28 @@ function Clear-AgySessionEvents {
         if ($null -eq $e) { break }
         Complete-AgyEvent -Path $e.File
     }
+}
+
+# An event whose supervisor died - a crash, a Ctrl+C, a rotation that gave up -
+# carries a session id that can never match again, so nothing will ever consume
+# it. Left alone they accumulate and every 500ms poll of every future run reads
+# past them. Anything this old is abandoned by definition: a live supervisor
+# picks its events up within a second.
+function Clear-AgyOrphanEvents {
+    param([int]$OlderThanHours = 1)
+    $dir = Get-AgyAutoPath 'events'
+    if (-not (Test-Path -LiteralPath $dir)) { return 0 }
+    $cutoff = (Get-Date).ToUniversalTime().AddHours(-[Math]::Abs($OlderThanHours))
+    $n = 0
+    foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.json' -ErrorAction SilentlyContinue) {
+        $e = Read-AgyAutoJson $f.FullName
+        $created = $null
+        if ($null -ne $e) { try { $created = ([datetime]$e.createdAt).ToUniversalTime() } catch { } }
+        if ($null -eq $created) { $created = $f.LastWriteTimeUtc }
+        if ($created -lt $cutoff) { Complete-AgyEvent -Path $f.FullName; $n++ }
+    }
+    if ($n -gt 0) { Write-AgyAutoLog -Message ("archived {0} orphaned event(s)" -f $n) }
+    $n
 }
 
 # --------------------------------------------------------------- reporting ---
@@ -257,6 +301,7 @@ function Start-AgySupervisor {
 
     $sessionId = [guid]::NewGuid().ToString()
     Clear-AgySessionEvents -SessionId $sessionId
+    Clear-AgyOrphanEvents | Out-Null
     Clear-AgyExpiredExhaustion | Out-Null
 
     $current = Get-AgyCurrentProfile
@@ -292,8 +337,8 @@ function Start-AgySupervisor {
             if ($child.Process.WaitForExit(500)) {
                 # The hook runs before the process exits, but give the event
                 # file a moment to land before concluding there is none.
-                $pending = Get-AgyPendingEvent -SessionId $sessionId
-                if ($null -eq $pending) { Start-Sleep -Milliseconds 400; $pending = Get-AgyPendingEvent -SessionId $sessionId }
+                $pending = Get-AgyPendingEvent -SessionId $sessionId -Since $child.SpawnedAt
+                if ($null -eq $pending) { Start-Sleep -Milliseconds 400; $pending = Get-AgyPendingEvent -SessionId $sessionId -Since $child.SpawnedAt }
                 if ($null -ne $pending -and $pending.Data.shouldRotate) { $quotaEvent = $pending }
                 elseif ($null -ne $pending) {
                     Write-AgyAutoLog -Message ("non-rotating event: {0}" -f $pending.Data.category)
@@ -301,7 +346,7 @@ function Start-AgySupervisor {
                 }
                 break
             }
-            $pending = Get-AgyPendingEvent -SessionId $sessionId
+            $pending = Get-AgyPendingEvent -SessionId $sessionId -Since $child.SpawnedAt
             if ($null -eq $pending) { continue }
             if (-not $pending.Data.shouldRotate) {
                 if ($pending.Data.category -eq 'AUTH_ERROR') {

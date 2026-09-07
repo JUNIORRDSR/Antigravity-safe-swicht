@@ -222,3 +222,44 @@ catch { 'BLOCKED' }
         Exit-AgyAutoLock $l2
     }
 }
+
+Describe 'adopting a profile whose metadata was lost' {
+    # state.json can lose an entry while the credential survives in Credential
+    # Manager. Without adoption the only way back is signing into that account
+    # again purely to re-register it.
+    It 'rebuilds the entry from the stored credential' {
+        Reset-TestWorld
+        Set-LiveBlob (New-TestBlob)
+        [void](Save-AgyProfile -Name 'work')
+        $fp = (Get-AgyProfileList | Where-Object { $_.Name -eq 'work' }).Fingerprint
+
+        # Lose the metadata only - the credential stays where it is.
+        $st = Get-AgyAutoState
+        $st.profiles.PSObject.Properties.Remove('work')
+        Set-AgyAutoState $st
+        $cfg = Get-AgyAutoConfig; $cfg.profileOrder = @(); Set-AgyAutoConfig $cfg
+        Assert-Equal 0 (Get-AgyAutoCount (Get-AgyProfileList))
+
+        $r = Register-AgyStoredProfile -Name 'work'
+        Assert-True $r.WasNew
+        Assert-Equal $fp $r.Fingerprint
+        $back = @(Get-AgyProfileList | Where-Object { $_.Name -eq 'work' })
+        Assert-Equal 1 $back.Count
+        Assert-True $back[0].Available 'an adopted profile is immediately eligible for rotation'
+        Assert-True (@((Get-AgyAutoConfig).profileOrder) -contains 'work') 'it must rejoin the rotation order'
+    }
+    It 'does not change which account is live' {
+        Reset-TestWorld
+        $a = New-TestBlob
+        Set-LiveBlob (New-TestBlob)
+        [void](Save-AgyProfile -Name 'work')
+        Set-LiveBlob $a
+        $before = Get-LiveFingerprint
+        [void](Register-AgyStoredProfile -Name 'work')
+        Assert-Equal $before (Get-LiveFingerprint)
+    }
+    It 'refuses a name with no stored credential instead of inventing one' {
+        Reset-TestWorld
+        Assert-Throws { Register-AgyStoredProfile -Name 'ghost' }
+    }
+}

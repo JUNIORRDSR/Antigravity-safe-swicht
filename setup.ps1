@@ -48,6 +48,33 @@ Step 'Installing the plugin'
 $pluginsRoot = Join-Path $env:USERPROFILE '.gemini\config\plugins'
 $installed = Join-Path $pluginsRoot 'agy-auto-switch'
 
+# Which shipped files differ from the source tree. `agy plugin install` can
+# leave an existing installation untouched when it decides nothing needs doing,
+# and plugin.json existing says only that SOME version is installed - which is
+# how a fix lands in the repo and never reaches the hook that actually runs.
+function Get-AgyInstallDrift {
+    param([Parameter(Mandatory)][string]$Source, [Parameter(Mandatory)][string]$Installed)
+    $drift = New-Object System.Collections.Generic.List[string]
+    if (-not (Test-Path -LiteralPath $Installed)) { return @('(nothing installed)') }
+    $check = {
+        param($Rel)
+        $s = Join-Path $Source $Rel
+        $d = Join-Path $Installed $Rel
+        if (-not (Test-Path -LiteralPath $s)) { return }
+        if (-not (Test-Path -LiteralPath $d)) { $drift.Add($Rel); return }
+        if ((Get-FileHash -LiteralPath $s).Hash -ne (Get-FileHash -LiteralPath $d).Hash) { $drift.Add($Rel) }
+    }
+    foreach ($rel in 'plugin.json', 'hooks.json', 'README.md') { & $check $rel }
+    foreach ($dir in 'scripts', 'skills', 'bin', 'docs') {
+        $root = Join-Path $Source $dir
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        foreach ($f in Get-ChildItem -LiteralPath $root -Recurse -File) {
+            & $check ($f.FullName.Substring($Source.Length + 1))
+        }
+    }
+    $drift.ToArray()
+}
+
 $installOk = $false
 try {
     & $realAgy plugin install $repoRoot 2>&1 | ForEach-Object { Say ('  ' + $_) }
@@ -72,6 +99,26 @@ if (-not $installOk) {
 }
 
 if (-not $installOk) { Say '  plugin installation failed' 'Red'; exit 1 }
+
+# Presence is not freshness. Overwrite exactly what drifted, then re-check:
+# setup must never report success over a stale hook or supervisor.
+$drift = @(Get-AgyInstallDrift -Source $repoRoot -Installed $installed)
+if ($drift.Count -gt 0) {
+    Say ('  refreshing {0} stale file(s) in the installed copy' -f $drift.Count) 'Yellow'
+    foreach ($rel in $drift) {
+        $dst = Join-Path $installed $rel
+        $dstDir = Split-Path -Parent $dst
+        if (-not (Test-Path -LiteralPath $dstDir)) { New-Item -ItemType Directory -Force -Path $dstDir | Out-Null }
+        Copy-Item -LiteralPath (Join-Path $repoRoot $rel) -Destination $dst -Force
+        Say ('    ' + $rel) 'DarkGray'
+    }
+    $drift = @(Get-AgyInstallDrift -Source $repoRoot -Installed $installed)
+    if ($drift.Count -gt 0) {
+        Say ('  installed copy still differs from the source: {0}' -f ($drift -join ', ')) 'Red'
+        exit 1
+    }
+}
+Say '  installed copy matches the source' 'Green'
 
 # `plugin install` copies the whole source tree, .git included. Drop it.
 $stagedGit = Join-Path $installed '.git'

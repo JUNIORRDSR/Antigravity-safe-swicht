@@ -69,7 +69,17 @@ different `%LOCALAPPDATA%` than your console does - a save that succeeded in its
 view can be invisible in yours. Onboarding commands belong in your own terminal.
 The stored credentials survive either way: they are in Credential Manager under
 `agy-auto-switch:profile:<name>`, and only the names and rotation order are lost
-with `state.json`.
+with `state.json`. That is what `adopt` is for - it rebuilds the metadata from
+the credential that is already stored, so you do not have to sign into the
+account again just to register it a second time:
+
+```powershell
+agy-auto profile adopt work
+agy-auto profile list
+```
+
+It only works for a name whose credential is still in the store; for anything
+else, sign in as that account and use `profile save`.
 
 ## `agy` still runs the official CLI
 

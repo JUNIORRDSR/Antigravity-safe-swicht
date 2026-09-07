@@ -113,6 +113,22 @@ inherited environment and stamps it on the event. A supervisor only ever picks
 up events carrying its own session id, so two supervisors running side by side
 never see each other's work.
 
+The session id identifies the supervisor, not the child - and that is not enough
+on its own. One agy emits a `Stop` event per conversation, its own plus every
+sub-agent's, so a session drained by quota writes a burst of them across the
+seconds it takes to shut down. Read back after the switch they all still carry
+the live session id, and the first leftover looks exactly like a fresh quota hit
+on the account that just took over: the supervisor kills a healthy session,
+marks the new profile exhausted with the old one's reset time, and runs out of
+profiles. So every read is also scoped by time - the instant the current child
+was spawned, captured before `Process.Start`. Anything older belongs to a child
+that is already gone and is archived unread.
+
+Events whose supervisor never came back - a crash, a Ctrl+C, a rotation that
+gave up - carry a session id that can never match again. A sweep at startup
+archives anything older than an hour, which no live supervisor can still be
+waiting on.
+
 ## The supervisor state machine
 
 ```

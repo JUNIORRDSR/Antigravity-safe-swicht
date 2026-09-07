@@ -55,6 +55,7 @@ agy-auto - quota-aware supervisor for Antigravity CLI
   agy-auto tui [args...]       Supervised interactive session (default).
 
   agy-auto profile save <name>     Store the signed-in account as <name>.
+  agy-auto profile adopt <name>    Re-register <name> from its stored credential.
   agy-auto profile list            Show profiles, quota state and fingerprints.
   agy-auto profile current         Which profile is signed in right now.
   agy-auto profile switch <name>   Switch accounts now (no agy may be running).
@@ -81,7 +82,14 @@ function Show-AgyAutoStatus {
     Write-Host ('  real agy        : {0}' -f $cfg.realAgyPath)
     Write-Host ('  resume strategy : {0}' -f $cfg.resumeStrategy)
     Write-Host ('  max switches    : {0}' -f $cfg.maxConsecutiveSwitches)
-    Write-Host ('  last switch     : {0}' -f $(if ($state.lastSwitchAt) { $state.lastSwitchAt } else { 'never' }))
+    # Local time, like the AVAILABLE column below: a raw UTC stamp next to
+    # local reset times reads as a clock that runs backwards.
+    $lastSwitch = 'never'
+    if ($state.lastSwitchAt) {
+        $lastSwitch = $state.lastSwitchAt
+        try { $lastSwitch = ([datetime]$state.lastSwitchAt).ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss') } catch { }
+    }
+    Write-Host ('  last switch     : {0}' -f $lastSwitch)
     Write-Host ''
     Show-AgyProfileTable
 }
@@ -121,6 +129,14 @@ function Invoke-AgyProfileCommand {
             $r = Save-AgyProfile -Name $name
             Write-Host ("Saved profile '{0}' ({1} bytes, fingerprint {2})." -f $r.Name, $r.BlobBytes, (Format-AgyFingerprint $r.Fingerprint)) -ForegroundColor Green
             Write-Host 'The credential itself stays in Windows Credential Manager and is never shown.' -ForegroundColor DarkGray
+            return 0
+        }
+        'adopt' {
+            if (-not $name) { Write-Host 'usage: agy-auto profile adopt <name>' -ForegroundColor Red; return 2 }
+            $r = Register-AgyStoredProfile -Name $name
+            $what = if ($r.WasNew) { 're-registered' } else { 'refreshed' }
+            Write-Host ("Profile '{0}' {1} from the credential store ({2} bytes, fingerprint {3})." -f $r.Name, $what, $r.BlobBytes, (Format-AgyFingerprint $r.Fingerprint)) -ForegroundColor Green
+            Write-Host 'The live credential was not touched. Use: agy-auto profile switch <name>' -ForegroundColor DarkGray
             return 0
         }
         'list' { Show-AgyProfileTable; return 0 }

@@ -115,6 +115,7 @@ agy
 | `agy-auto run [args...]` | Supervised headless run for long unattended tasks |
 | `agy-auto profile list` | Profiles, quota state, fingerprints |
 | `agy-auto profile save <name>` | Store the signed-in account |
+| `agy-auto profile adopt <name>` | Re-register a profile from its stored credential |
 | `agy-auto profile current` | Which account is signed in |
 | `agy-auto profile switch <name>` | Manual switch (refuses while agy is running) |
 | `agy-auto profile next` | What rotation would pick next |

@@ -160,3 +160,99 @@ Describe 'event routing between concurrent supervisors' {
         Assert-Null (Get-AgyPendingEvent -SessionId 'once')
     }
 }
+
+Describe 'event routing after a child is replaced' {
+    # The failure this guards against: one dying agy emits a quota event per
+    # conversation - its own and every sub-agent's - over the shutdown window.
+    # Read back after the switch, the leftovers look like a fresh hit and drain
+    # the profile that just took over, until nothing is left to rotate to.
+    function New-TestEvent([string]$Name, [datetime]$CreatedAt) {
+        Write-AgyAutoFileAtomic -Path (Get-AgyAutoPath "events\$Name.json") -Content (ConvertTo-AgyAutoJson ([ordered]@{
+                    session      = 'replaced'
+                    createdAt    = $CreatedAt.ToUniversalTime().ToString('o')
+                    shouldRotate = $true
+                    category     = 'INDIVIDUAL_QUOTA'
+                }))
+    }
+    function Reset-TestEvents {
+        Initialize-AgyAutoDirs
+        foreach ($d in 'events', 'events\processed') {
+            Get-ChildItem -LiteralPath (Get-AgyAutoPath $d) -Filter '*.json' -ErrorAction SilentlyContinue | Remove-Item -Force
+        }
+    }
+
+    $spawn = (Get-Date).ToUniversalTime()
+
+    It 'ignores an event written before the current child was spawned' {
+        Reset-TestEvents
+        New-TestEvent 'ev-old' $spawn.AddSeconds(-10)
+        Assert-Null (Get-AgyPendingEvent -SessionId 'replaced' -Since $spawn)
+    }
+    It 'archives the stale event instead of leaving it to be read again' {
+        Reset-TestEvents
+        New-TestEvent 'ev-old' $spawn.AddSeconds(-10)
+        [void](Get-AgyPendingEvent -SessionId 'replaced' -Since $spawn)
+        Assert-Equal 0 @(Get-ChildItem -LiteralPath (Get-AgyAutoPath 'events') -Filter '*.json').Count
+        Assert-Equal 1 @(Get-ChildItem -LiteralPath (Get-AgyAutoPath 'events\processed') -Filter '*.json').Count
+    }
+    It 'still delivers an event the live child raised itself' {
+        Reset-TestEvents
+        New-TestEvent 'ev-live' $spawn.AddSeconds(2)
+        Assert-NotNull (Get-AgyPendingEvent -SessionId 'replaced' -Since $spawn)
+    }
+    It 'drops the whole shutdown storm and keeps only what came after' {
+        Reset-TestEvents
+        foreach ($i in 1..4) { New-TestEvent ("ev-storm-$i") $spawn.AddSeconds(-$i) }
+        New-TestEvent 'ev-zzz-live' $spawn.AddSeconds(1)
+        $e = Get-AgyPendingEvent -SessionId 'replaced' -Since $spawn
+        Assert-NotNull $e
+        Assert-Match 'ev-zzz-live' $e.File
+        Assert-Equal 4 @(Get-ChildItem -LiteralPath (Get-AgyAutoPath 'events\processed') -Filter '*.json').Count
+    }
+    It 'treats an event with no createdAt as stale rather than rotating on it' {
+        Reset-TestEvents
+        Write-AgyAutoFileAtomic -Path (Get-AgyAutoPath 'events\ev-nodate.json') `
+            -Content (ConvertTo-AgyAutoJson ([ordered]@{ session = 'replaced'; shouldRotate = $true }))
+        Assert-Null (Get-AgyPendingEvent -SessionId 'replaced' -Since $spawn)
+    }
+    It 'is unchanged when no child instant is supplied' {
+        Reset-TestEvents
+        New-TestEvent 'ev-old' $spawn.AddSeconds(-10)
+        Assert-NotNull (Get-AgyPendingEvent -SessionId 'replaced')
+    }
+}
+
+Describe 'orphaned events from a supervisor that never came back' {
+    function Reset-OrphanDir {
+        Initialize-AgyAutoDirs
+        foreach ($d in 'events', 'events\processed') {
+            Get-ChildItem -LiteralPath (Get-AgyAutoPath $d) -Filter '*.json' -ErrorAction SilentlyContinue | Remove-Item -Force
+        }
+    }
+    function New-OrphanEvent([string]$Name, $CreatedAt) {
+        $body = [ordered]@{ session = 'a-dead-supervisor'; shouldRotate = $true }
+        if ($null -ne $CreatedAt) { $body.createdAt = ([datetime]$CreatedAt).ToUniversalTime().ToString('o') }
+        Write-AgyAutoFileAtomic -Path (Get-AgyAutoPath "events\$Name.json") -Content (ConvertTo-AgyAutoJson $body)
+    }
+    function Count-Events([string]$Dir) { @(Get-ChildItem -LiteralPath (Get-AgyAutoPath $Dir) -Filter '*.json' -ErrorAction SilentlyContinue).Count }
+
+    It 'archives an event no live supervisor can still claim' {
+        Reset-OrphanDir
+        New-OrphanEvent 'ev-abandoned' ((Get-Date).ToUniversalTime().AddHours(-3))
+        Assert-Equal 1 (Clear-AgyOrphanEvents)
+        Assert-Equal 0 (Count-Events 'events')
+        Assert-Equal 1 (Count-Events 'events\processed')
+    }
+    It 'leaves a recent event for the supervisor that is still watching it' {
+        Reset-OrphanDir
+        New-OrphanEvent 'ev-recent' ((Get-Date).ToUniversalTime().AddMinutes(-2))
+        Assert-Equal 0 (Clear-AgyOrphanEvents)
+        Assert-Equal 1 (Count-Events 'events')
+    }
+    It 'falls back to the file time when the event carries no createdAt' {
+        Reset-OrphanDir
+        New-OrphanEvent 'ev-nodate' $null
+        Assert-Equal 0 (Clear-AgyOrphanEvents) 'a just-written file is not orphaned whatever it contains'
+        Assert-Equal 1 (Count-Events 'events')
+    }
+}
