@@ -65,19 +65,28 @@ Setup finds the real `agy.exe` **before** installing anything, installs the
 plugin, writes the command shims, puts them first on your user PATH, and runs
 the doctor.
 
-Then open a **new terminal** and register your accounts:
+Then open a **new terminal** - PATH is read at process start, so the shell you
+ran setup in still cannot see `agy`, `agy-auto` or `agy-raw`. Register account A:
 
 ```powershell
-# signed in as account A
-agy-auto profile save personal
+agy-auto profile save personal   # whichever account is signed in now
+agy-auto profile list            # must now list it
 ```
 
-Sign in as account B once, by hand - this is the only manual step:
+Sign in as account B once, by hand - this is the only manual step. agy has no
+`logout` subcommand, so drop the live credential and let it ask again. Account A
+is already safe in its own Credential Manager entry at this point:
 
 ```powershell
-agy-raw          # the real agy, unsupervised; sign in as B
+cmdkey /delete:gemini:antigravity
+agy-raw                          # the real agy, unsupervised; sign in as B
 agy-auto profile save work
+agy-auto profile list            # two profiles, two DIFFERENT fingerprints
 ```
+
+Two identical fingerprints mean the same account was saved twice and the sign-in
+did not take. Changed your mind mid-way? `agy-auto profile switch personal`
+puts account A back.
 
 Check everything:
 

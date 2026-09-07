@@ -9,6 +9,68 @@ agy-auto doctor --probe
 `--probe` spends one tiny turn and proves the Stop hook actually fires. Almost
 everything below shows up in that report.
 
+## `agy-raw` is not recognised as a command
+
+```
+agy-raw : El termino 'agy-raw' no se reconoce como nombre de un cmdlet ...
+CommandNotFoundException
+```
+
+The shims exist; your shell does not know about them yet. PATH is read once, at
+process start, so the terminal you ran `setup.ps1` in - and any terminal opened
+before it - still carries the old value. This is the single most common first
+five minutes of this tool.
+
+Open a new terminal. Or refresh the current one without closing it:
+
+```powershell
+$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+```
+
+If a brand-new terminal still cannot find it, the persisted PATH is the problem,
+not the session:
+
+```powershell
+[Environment]::GetEnvironmentVariable('Path','User') -split ';' | Select-String agy-auto-switch
+```
+
+Nothing back means `setup.ps1` did not get to the PATH step, or was run with
+`-SkipPath`. Re-run `.\setup.ps1`.
+
+## `profile list` says none right after a successful save
+
+`agy-auto profile save work` prints `Saved profile 'work' ...` and the very next
+`agy-auto profile list` answers `No profiles registered`.
+
+Profile metadata lives in `%LOCALAPPDATA%\agy-auto-switch\state.json`, separately
+from the credential itself. That message means the file the save wrote is not
+the file the list read. Check whether it exists at all, **from your own
+terminal**:
+
+```powershell
+dir $env:LOCALAPPDATA\agy-auto-switch
+```
+
+- **No `state.json`, and `config.json` is dated moments ago.** The directory was
+  recreated from defaults by the command you just ran. Whatever earlier setup
+  wrote never landed here. Save the profiles again from this terminal, verifying
+  with `profile list` after each one.
+- **`state.json` is present but `profile list` still reports none.** The file is
+  unreadable or not valid JSON, and `Read-AgyAutoJson` degrades to an empty state
+  rather than crashing. Confirm with:
+  ```powershell
+  Get-Content $env:LOCALAPPDATA\agy-auto-switch\state.json -Raw | ConvertFrom-Json
+  ```
+  A parse error here is the answer. Delete the file and re-save the profiles;
+  nothing in it is a secret and none of it is unrecoverable.
+
+If an AI agent ran the setup on your behalf, be aware its shell may resolve a
+different `%LOCALAPPDATA%` than your console does - a save that succeeded in its
+view can be invisible in yours. Onboarding commands belong in your own terminal.
+The stored credentials survive either way: they are in Credential Manager under
+`agy-auto-switch:profile:<name>`, and only the names and rotation order are lost
+with `state.json`.
+
 ## `agy` still runs the official CLI
 
 `doctor` says `supervisor NOT in front`, or `where agy` lists

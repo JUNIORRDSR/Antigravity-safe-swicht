@@ -13,6 +13,22 @@ Guide the user through onboarding. Never print, echo, or ask for credential
 material at any point - the whole design exists so that nobody, including you,
 has to look at a token.
 
+## Run the commands in the user's own terminal
+
+Ask the user to run each command and paste the output. Do not substitute your
+own tool calls for theirs and do not report a step as done on the strength of a
+file you read yourself.
+
+Two reasons, both real. Sign-in is interactive and cannot happen inside a tool
+call at all. And an agent shell may be sandboxed or otherwise resolve a
+different view of `%LOCALAPPDATA%` than the user's console, in which case a
+`profile save` you ran "succeeds" against a `state.json` the user's `agy` will
+never read. Every step below therefore has a verification command whose output
+comes from the user.
+
+If your reading of the filesystem ever contradicts what the user's terminal
+prints, the terminal is right.
+
 ## Step 1 - diagnose before changing anything
 
 ```
@@ -36,6 +52,7 @@ just a label the user chooses:
 ```
 agy-auto quota
 agy-auto profile save personal
+agy-auto profile list
 ```
 
 `profile save` copies the live Credential Manager entry to
@@ -43,20 +60,41 @@ agy-auto profile save personal
 a byte count and a truncated fingerprint - that is all the visibility that
 exists by design.
 
+`profile list` is not optional. If it still says `No profiles registered` after
+a save that reported success, stop: `state.json` is not persisting where the
+user's `agy` reads it, and nothing downstream will work. See "profile list says
+none right after a successful save" in `docs/troubleshooting.md`.
+
 ## Step 3 - register the second account
 
-This is the one manual step in the whole system. The user must sign in as the
-second account themselves:
+This is the one manual step in the whole system, and the user has to do the
+sign-in themselves.
 
-1. Ask them to sign out / sign in to account B using `agy-raw` (the unsupervised
-   passthrough, so no rotation logic interferes).
-2. Confirm the switch worked: `agy-auto profile current` should now report
-   `unknown`, and `agy-auto quota` should show account B's numbers.
-3. Save it:
+agy has no `logout` subcommand - `agy --help` lists none - so the way to make it
+ask again is to remove the live credential. This is safe only *after* step 2
+verified account A is stored under its own profile:
+
+```
+cmdkey /delete:gemini:antigravity
+agy-raw
+```
+
+`agy-raw` is the unsupervised passthrough, so no rotation logic interferes with
+the sign-in. Have the user sign in as account B and leave the TUI, then:
 
 ```
 agy-auto profile save work
+agy-auto profile list
 ```
+
+Both profiles must appear with **different** fingerprints. Identical
+fingerprints mean the same account was saved under two names because the
+sign-in did not take - delete the second profile and redo the sign-in rather
+than leaving a rotation that switches to the account it just left.
+
+If the sign-in fails or the user changes their mind, `agy-auto profile switch
+personal` rewrites the live credential from the stored copy. Nothing was lost by
+the `cmdkey /delete`.
 
 Repeat for any further accounts. Order of registration is the rotation order.
 
