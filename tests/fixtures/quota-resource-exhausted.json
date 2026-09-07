@@ -1,0 +1,11 @@
+{
+  "artifactDirectoryPath": "C:/Users/example/.gemini/antigravity-cli/brain/22222222-2222-3333-4444-555555555555",
+  "conversationId": "22222222-2222-3333-4444-555555555555",
+  "error": "rpc error: code = ResourceExhausted desc = RESOURCE_EXHAUSTED: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h",
+  "executionNum": 7,
+  "fullyIdle": true,
+  "modelName": "claude-opus",
+  "terminationReason": "ERROR",
+  "transcriptPath": "C:/Users/example/.gemini/antigravity-cli/brain/22222222-2222-3333-4444-555555555555/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": {}
+}

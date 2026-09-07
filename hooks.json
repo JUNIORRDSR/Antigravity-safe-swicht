@@ -1,0 +1,12 @@
+{
+  "agy-auto-switch": {
+    "enabled": true,
+    "Stop": [
+      {
+        "type": "command",
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stop-hook.ps1",
+        "timeout": 20
+      }
+    ]
+  }
+}

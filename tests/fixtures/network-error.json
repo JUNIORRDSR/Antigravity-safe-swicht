@@ -1,0 +1,11 @@
+{
+  "artifactDirectoryPath": "C:/Users/example/.gemini/antigravity-cli/brain/33333333-2222-3333-4444-555555555555",
+  "conversationId": "33333333-2222-3333-4444-555555555555",
+  "error": "Post \"https://cloudcode-pa.googleapis.com/v1internal:generate\": dial tcp 142.250.0.1:443: connectex: A connection attempt failed because the connected party did not properly respond after a period of time",
+  "executionNum": 1,
+  "fullyIdle": true,
+  "modelName": "gemini-3.8-flash-high",
+  "terminationReason": "ERROR",
+  "transcriptPath": "C:/Users/example/.gemini/antigravity-cli/brain/33333333-2222-3333-4444-555555555555/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": {}
+}

@@ -1,0 +1,11 @@
+{
+  "artifactDirectoryPath": "C:/Users/example/.gemini/antigravity-cli/brain/11111111-2222-3333-4444-555555555555",
+  "conversationId": "11111111-2222-3333-4444-555555555555",
+  "error": "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 1h4m13s. Error ID: a54ec08c-716f-42c4-85b6-1c68a09bccd0-132",
+  "executionNum": 3,
+  "fullyIdle": true,
+  "modelName": "gemini-3.8-flash-high",
+  "terminationReason": "ERROR",
+  "transcriptPath": "C:/Users/example/.gemini/antigravity-cli/brain/11111111-2222-3333-4444-555555555555/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": {}
+}
