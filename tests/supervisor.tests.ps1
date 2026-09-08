@@ -256,3 +256,53 @@ Describe 'orphaned events from a supervisor that never came back' {
         Assert-Equal 1 (Count-Events 'events')
     }
 }
+
+Describe 'event routing when a hook outlives the agy that spawned it' {
+    # The case a timestamp cannot decide: agy is terminated, but a Stop hook it
+    # had already launched keeps running and writes its event AFTER the
+    # replacement session has started. Only the token says who wrote it.
+    function Reset-TokenDir {
+        Initialize-AgyAutoDirs
+        foreach ($d in 'events', 'events\processed') {
+            Get-ChildItem -LiteralPath (Get-AgyAutoPath $d) -Filter '*.json' -ErrorAction SilentlyContinue | Remove-Item -Force
+        }
+    }
+    function New-TokenEvent([string]$Name, [string]$Child, $CreatedAt) {
+        Write-AgyAutoFileAtomic -Path (Get-AgyAutoPath "events\$Name.json") -Content (ConvertTo-AgyAutoJson ([ordered]@{
+                    session      = 'tokens'
+                    child        = $Child
+                    createdAt    = ([datetime]$CreatedAt).ToUniversalTime().ToString('o')
+                    shouldRotate = $true
+                    category     = 'INDIVIDUAL_QUOTA'
+                }))
+    }
+
+    $spawn = (Get-Date).ToUniversalTime()
+
+    It 'ignores a late event from the replaced child even though it is newer than the spawn' {
+        Reset-TokenDir
+        New-TokenEvent 'ev-late' 'child-A' $spawn.AddSeconds(5)
+        Assert-Null (Get-AgyPendingEvent -SessionId 'tokens' -ChildToken 'child-B' -Since $spawn) `
+            'the timestamp says fresh; only the token says otherwise'
+        Assert-Equal 1 @(Get-ChildItem -LiteralPath (Get-AgyAutoPath 'events\processed') -Filter '*.json').Count
+    }
+    It 'delivers an event the live child stamped itself' {
+        Reset-TokenDir
+        New-TokenEvent 'ev-mine' 'child-B' $spawn.AddSeconds(1)
+        $e = Get-AgyPendingEvent -SessionId 'tokens' -ChildToken 'child-B' -Since $spawn
+        Assert-NotNull $e
+        Assert-Equal 'child-B' $e.Data.child
+    }
+    It 'trusts the token over the clock' {
+        Reset-TokenDir
+        New-TokenEvent 'ev-skewed' 'child-B' $spawn.AddSeconds(-30)
+        Assert-NotNull (Get-AgyPendingEvent -SessionId 'tokens' -ChildToken 'child-B' -Since $spawn) `
+            'a matching token identifies the author whatever the clock did'
+    }
+    It 'falls back to the spawn instant for an event with no token at all' {
+        Reset-TokenDir
+        Write-AgyAutoFileAtomic -Path (Get-AgyAutoPath 'events\ev-untokened.json') -Content (ConvertTo-AgyAutoJson ([ordered]@{
+                    session = 'tokens'; createdAt = $spawn.AddSeconds(-10).ToString('o'); shouldRotate = $true }))
+        Assert-Null (Get-AgyPendingEvent -SessionId 'tokens' -ChildToken 'child-B' -Since $spawn)
+    }
+}

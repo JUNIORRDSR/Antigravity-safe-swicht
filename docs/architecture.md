@@ -120,9 +120,17 @@ seconds it takes to shut down. Read back after the switch they all still carry
 the live session id, and the first leftover looks exactly like a fresh quota hit
 on the account that just took over: the supervisor kills a healthy session,
 marks the new profile exhausted with the old one's reset time, and runs out of
-profiles. So every read is also scoped by time - the instant the current child
-was spawned, captured before `Process.Start`. Anything older belongs to a child
-that is already gone and is archived unread.
+profiles. So the supervisor also gives every child its own token in
+`AGY_AUTO_CHILD`, which the hook stamps on the event: an event names its author
+outright, and anything carrying someone else's token is archived unread.
+
+A timestamp is not enough on its own. A hook is a separate process that agy
+launches and waits on, and it can outlive the agy that spawned it - terminating
+the child does not stop a hook already running, so its event can land seconds
+later, after the replacement session has started. Verified by replaying the
+incident: the spawn instant caught three leftovers and missed the two written
+after the switch. The spawn instant remains the fallback for an event with no
+token.
 
 Events whose supervisor never came back - a crash, a Ctrl+C, a rotation that
 gave up - carry a session id that can never match again. A sweep at startup

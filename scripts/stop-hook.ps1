@@ -56,6 +56,10 @@ try {
                 eventId               = [guid]::NewGuid().ToString()
                 createdAt             = (Get-Date).ToUniversalTime().ToString('o')
                 session               = $env:AGY_AUTO_SESSION
+                # Which run of agy under that supervisor. The supervisor drops
+                # events carrying anyone else's token, so a hook that outlives
+                # the agy it belonged to cannot rotate the replacement.
+                child                 = $env:AGY_AUTO_CHILD
                 supervisorPid         = $env:AGY_AUTO_SUPERVISOR_PID
                 childPid              = $env:AGY_AUTO_CHILD_PID
                 profile               = $env:AGY_AUTO_PROFILE

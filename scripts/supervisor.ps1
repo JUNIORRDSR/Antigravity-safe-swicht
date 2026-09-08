@@ -114,22 +114,27 @@ function Start-AgyChild {
 
     # The hook reads these back out of its inherited environment. This is the
     # only correlation channel: workspacePaths arrives empty in print mode.
+    # AGY_AUTO_SESSION names the supervisor; AGY_AUTO_CHILD names this one run
+    # of agy under it, without which an event from the session we just replaced
+    # is indistinguishable from one the replacement raised.
+    $childToken = [guid]::NewGuid().ToString()
     $psi.EnvironmentVariables['AGY_AUTO_SESSION'] = $SessionId
+    $psi.EnvironmentVariables['AGY_AUTO_CHILD'] = $childToken
     $psi.EnvironmentVariables['AGY_AUTO_SUPERVISOR_PID'] = "$PID"
     $psi.EnvironmentVariables['AGY_AUTO_CWD'] = $Cwd
     if ($ProfileName) { $psi.EnvironmentVariables['AGY_AUTO_PROFILE'] = $ProfileName }
 
     $p = New-Object Diagnostics.Process
     $p.StartInfo = $psi
-    # Taken before Start(): no hook of this child can write an event earlier
-    # than this, and every event from the previous child is already older.
+    # Fallback for an event carrying no token: nothing this child writes can
+    # predate the moment just before it started.
     $spawnedAt = (Get-Date).ToUniversalTime()
     if (-not $p.Start()) { throw "Failed to start '$RealAgyPath'" }
 
     $startTime = $null
     try { $startTime = $p.StartTime } catch { }
     Write-AgyAutoLog -Message ("agy child PID {0} started" -f $p.Id)
-    [pscustomobject]@{ Process = $p; Pid = $p.Id; StartTime = $startTime; SpawnedAt = $spawnedAt }
+    [pscustomobject]@{ Process = $p; Pid = $p.Id; StartTime = $startTime; SpawnedAt = $spawnedAt; Token = $childToken }
 }
 
 # The identity gate: only ever act on the exact process we launched.
@@ -181,14 +186,21 @@ function Stop-AgyChild {
 
 # ------------------------------------------------------------------ events ---
 
-# -Since is the current child's spawn instant. A quota error raised by the
-# child we already replaced says nothing about the credential now in use, and
-# one dying agy emits one event per conversation - the agent's own plus every
-# sub-agent's - so the queue routinely outlives its author. Without this gate
-# the first leftover is read back as a fresh hit and drains the new profile.
+# A quota error raised by the child we already replaced says nothing about the
+# credential now in use, and one dying agy emits one event per conversation -
+# the agent's own plus every sub-agent's - so the queue routinely outlives its
+# author. Read back unfiltered, the first leftover looks like a fresh hit and
+# drains the profile that has just taken over.
+#
+# -ChildToken settles it: the hook stamps the token of the agy that ran it, so
+# an event names its author outright. -Since (the child's spawn instant) is only
+# the fallback for an event carrying no token, because time alone is not enough
+# - a hook process can outlive the agy that spawned it and land its event after
+# the replacement has already started.
 function Get-AgyPendingEvent {
     param(
         [Parameter(Mandatory)][string]$SessionId,
+        [AllowNull()][string]$ChildToken,
         [AllowNull()][Nullable[datetime]]$Since
     )
     $dir = Get-AgyAutoPath 'events'
@@ -197,16 +209,25 @@ function Get-AgyPendingEvent {
         $e = Read-AgyAutoJson $f.FullName
         if ($null -eq $e) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue; continue }
         if ($e.session -ne $SessionId) { continue }   # another supervisor's event
-        if ($null -ne $Since) {
-            # A missing or unreadable createdAt is treated as stale: an event
-            # that cannot prove it belongs to the live child must not rotate it.
+
+        $stamped = ''
+        try { if ($e.child) { $stamped = [string]$e.child } } catch { }
+
+        $mine = $true
+        if ($ChildToken -and $stamped) {
+            $mine = ($stamped -eq $ChildToken)
+        } elseif ($null -ne $Since) {
+            # No token: a hook from before this field existed. An unreadable
+            # createdAt counts as stale - an event that cannot prove it belongs
+            # to the live child must not be allowed to rotate it.
             $created = $null
             try { $created = ([datetime]$e.createdAt).ToUniversalTime() } catch { }
-            if ($null -eq $created -or $created -lt $Since) {
-                Write-AgyAutoLog -Message ("ignoring event from a previous child: {0}" -f $f.Name)
-                Complete-AgyEvent -Path $f.FullName
-                continue
-            }
+            $mine = ($null -ne $created -and $created -ge $Since)
+        }
+        if (-not $mine) {
+            Write-AgyAutoLog -Message ("ignoring event from a previous child: {0}" -f $f.Name)
+            Complete-AgyEvent -Path $f.FullName
+            continue
         }
         return [pscustomobject]@{ File = $f.FullName; Data = $e }
     }
@@ -337,8 +358,8 @@ function Start-AgySupervisor {
             if ($child.Process.WaitForExit(500)) {
                 # The hook runs before the process exits, but give the event
                 # file a moment to land before concluding there is none.
-                $pending = Get-AgyPendingEvent -SessionId $sessionId -Since $child.SpawnedAt
-                if ($null -eq $pending) { Start-Sleep -Milliseconds 400; $pending = Get-AgyPendingEvent -SessionId $sessionId -Since $child.SpawnedAt }
+                $pending = Get-AgyPendingEvent -SessionId $sessionId -ChildToken $child.Token -Since $child.SpawnedAt
+                if ($null -eq $pending) { Start-Sleep -Milliseconds 400; $pending = Get-AgyPendingEvent -SessionId $sessionId -ChildToken $child.Token -Since $child.SpawnedAt }
                 if ($null -ne $pending -and $pending.Data.shouldRotate) { $quotaEvent = $pending }
                 elseif ($null -ne $pending) {
                     Write-AgyAutoLog -Message ("non-rotating event: {0}" -f $pending.Data.category)
@@ -346,7 +367,7 @@ function Start-AgySupervisor {
                 }
                 break
             }
-            $pending = Get-AgyPendingEvent -SessionId $sessionId -Since $child.SpawnedAt
+            $pending = Get-AgyPendingEvent -SessionId $sessionId -ChildToken $child.Token -Since $child.SpawnedAt
             if ($null -eq $pending) { continue }
             if (-not $pending.Data.shouldRotate) {
                 if ($pending.Data.category -eq 'AUTH_ERROR') {
